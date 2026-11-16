@@ -184,7 +184,8 @@ function receiveState(state) {
   const newKey = game ? `${state.phase}-${game.questIndex}-${game.rejectCount}-${game.leaderId}` : state.phase;
   if (newKey !== selectionKey) {
     selectionKey = newKey;
-    selectedTeam = new Set();
+    // A reloaded leader gets back the picks they already made.
+    selectedTeam = new Set(game ? game.draftTeam : []);
     selectedTarget = null;
   }
   if (!game) roleVisible = false;
@@ -371,7 +372,12 @@ function renderPhasePanel(game) {
         <button class="primary wide" data-action="proposeTeam" ${selectedTeam.size === teamSize ? '' : 'disabled'}>Propose team (${selectedTeam.size}/${teamSize})</button>
       </section>`;
     }
-    return `<section class="panel"><h2>Quest ${questNumber}</h2><p>${nameOf(game.leaderId)} is picking ${teamSize} players. Discuss!</p></section>`;
+    const picked = game.draftTeam;
+    return `<section class="panel"><h2>Quest ${questNumber}</h2>
+      <p>${nameOf(game.leaderId)} is picking ${teamSize} players. Discuss!</p>
+      <p class="muted">Picked so far (${picked.length}/${teamSize}):</p>
+      ${picked.length ? chipList(picked) : '<p class="muted">No one yet.</p>'}
+    </section>`;
   }
 
   if (phase === 'vote') {
@@ -471,10 +477,14 @@ function renderPlayers(game) {
 
   const rows = game.seatOrder.map((id) => {
     const player = playerById(id);
-    const selected = phase === 'team' ? selectedTeam.has(id) : selectedTarget === id;
+    const isLeaderPicking = phase === 'team' && game.leaderId === you;
+    let selected = selectedTarget === id;
+    if (isLeaderPicking) selected = selectedTeam.has(id);
+    else if (phase === 'team') selected = game.draftTeam.includes(id);
     const onTeam = ['vote', 'quest'].includes(phase) && game.team.includes(id);
     const badges = [];
     if (id === game.leaderId) badges.push('<span class="badge leader">Leader</span>');
+    if (phase === 'team' && selected) badges.push('<span class="badge team">Picked</span>');
     if (onTeam) badges.push('<span class="badge team">On quest</span>');
     if (id === game.ladyHolder) badges.push('<span class="badge lady">🌊 Lady</span>');
     if (phase === 'vote' && game.votedIds.includes(id)) badges.push('<span class="badge done">Voted</span>');
@@ -596,6 +606,7 @@ appElement.addEventListener('click', async (event) => {
         if (selectedTeam.has(id)) selectedTeam.delete(id);
         else if (selectedTeam.size < teamSize) selectedTeam.add(id);
         else showToast(`The team has ${teamSize} players. Tap someone to remove them first.`);
+        send({ type: 'selectTeam', team: [...selectedTeam] });
       } else {
         selectedTarget = selectedTarget === id ? null : id;
       }

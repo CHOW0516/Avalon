@@ -198,3 +198,17 @@ test('lady of the lake: starts right of leader, used after quests 2-4, cannot ta
   assert.strictEqual(room.phase, 'lady');
   assert.ok(game.handleAction(room, target, { type: 'ladyCheck', targetId: holder }));
 });
+
+test('everyone sees the leader\'s picks before the team is confirmed', () => {
+  const room = makeRoom(5);
+  game.startGame(room);
+  const leader = game.leaderId(room.game);
+  const other = room.game.seatOrder.find((id) => id !== leader);
+  assert.ok(game.handleAction(room, other, { type: 'selectTeam', team: ['p0'] }));
+  assert.ok(game.handleAction(room, leader, { type: 'selectTeam', team: ['p0', 'p1', 'p2'] }));
+  assert.strictEqual(game.handleAction(room, leader, { type: 'selectTeam', team: ['p0'] }), null);
+  assert.deepStrictEqual(game.gameViewFor(room, other).draftTeam, ['p0']);
+  // After a rejected vote the next leader starts with no picks.
+  proposeAndVote(room, ['p0', 'p1'], false);
+  assert.deepStrictEqual(room.game.draftTeam, []);
+});
