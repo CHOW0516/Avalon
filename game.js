@@ -82,6 +82,8 @@ function startGame(room, random = Math.random) {
     draftTeam: [], // the leader's picks so far, shown to everyone before confirming
     votes: {},
     lastVote: null,
+    history: [], // every team vote, and the quest result when a team was approved
+    seatHandoffs: [], // players the host made a rejoin link for
     questCards: {},
     ladyHolder,
     ladyPastHolders: ladyHolder ? [ladyHolder] : [],
@@ -124,6 +126,7 @@ function resolveVote(room) {
     approved,
     questIndex: game.questIndex,
   };
+  game.history.push({ ...game.lastVote, failCount: null, success: null });
   game.votes = {};
   if (approved) {
     game.questCards = {};
@@ -147,6 +150,9 @@ function resolveQuest(room) {
     failCount,
     success: failCount < needed,
   });
+  const historyEntry = game.history[game.history.length - 1];
+  historyEntry.failCount = failCount;
+  historyEntry.success = failCount < needed;
   game.questCards = {};
 
   const successCount = game.questResults.filter((result) => result.success).length;
@@ -290,6 +296,8 @@ function gameViewFor(room, playerId) {
     draftTeam: game.draftTeam,
     votedIds: Object.keys(game.votes),
     lastVote: game.lastVote,
+    history: game.history,
+    seatHandoffs: game.seatHandoffs,
     playedIds: Object.keys(game.questCards),
     ladyHolder: game.ladyHolder,
     ladyPastHolders: game.ladyPastHolders,

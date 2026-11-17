@@ -252,6 +252,26 @@ function handleMessage(socket, message) {
       return broadcast(room);
     }
 
+    case 'claimHost': {
+      const host = room.players.find((candidate) => candidate.id === room.hostId);
+      if (host && host.connections > 0) return sendError(socket, 'The host is still online.');
+      room.hostId = player.id;
+      return broadcast(room);
+    }
+
+    // Lets another phone take over the seat of a player who dropped out mid-game.
+    case 'seatLink': {
+      if (!isHost) return sendError(socket, 'Only the host can make a rejoin link.');
+      if (!room.game) return sendError(socket, 'The game has not started.');
+      const target = room.players.find((candidate) => candidate.id === message.playerId);
+      if (!target) return sendError(socket, 'Unknown player.');
+      if (target.connections > 0) return sendError(socket, 'That player is online.');
+      target.token = newId(); // the old phone can no longer rejoin
+      room.game.seatHandoffs.push(target.id);
+      socket.send(JSON.stringify({ type: 'seatLink', playerId: target.id, token: target.token }));
+      return broadcast(room);
+    }
+
     case 'backToLobby': {
       if (!isHost) return sendError(socket, 'Only the host can start a new game.');
       if (room.phase !== 'end') return sendError(socket, 'The game is not over yet.');

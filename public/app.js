@@ -34,6 +34,9 @@ let selectedTarget = null;
 let selectionKey = '';
 let photoUploadedThisConnection = false;
 let reconnectTimer = null;
+let historyOpen = false;
+let lastTurnKey = '';
+let seatLinkInfo = null; // { playerId, link } while the host is sharing a rejoin link
 
 // ---------- Local storage helpers (they can fail in private mode, so always wrapped) ----------
 
@@ -147,10 +150,14 @@ function connect() {
       history.replaceState(null, '', '/');
     } else if (message.type === 'state') {
       receiveState(message.state);
+    } else if (message.type === 'seatLink') {
+      const session = readStorage('avalonSession');
+      seatLinkInfo = { playerId: message.playerId, link: `${location.origin}/?room=${session.code}&seat=${message.playerId}&key=${message.token}` };
+      render();
     } else if (message.type === 'error') {
       showToast(message.message);
     } else if (message.type === 'sessionExpired' || message.type === 'left') {
-      if (message.type === 'sessionExpired' && readStorage('avalonSession')) showToast('That room has ended.');
+      if (message.type === 'sessionExpired' && readStorage('avalonSession')) showToast('That room has ended, or your seat moved to another phone.');
       writeStorage('avalonSession', null);
       roomState = null;
       renderHome();
@@ -189,8 +196,54 @@ function receiveState(state) {
     selectedTarget = null;
   }
   if (!game) roleVisible = false;
+  if (seatLinkInfo && playerById(seatLinkInfo.playerId).connected) seatLinkInfo = null;
+
+  // Tell the player when the game is waiting for them.
+  const myTurn = isMyTurn();
+  const turnKey = myTurn ? newKey : '';
+  if (myTurn && turnKey !== lastTurnKey && navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  lastTurnKey = turnKey;
+  document.title = myTurn ? '● Your turn · Avalon Night' : 'Avalon Night';
 
   render();
+}
+
+function isMyTurn() {
+  const game = roomState && roomState.game;
+  if (!game || !game.myRole) return false;
+  const you = roomState.you;
+  switch (roomState.phase) {
+    case 'team': return game.leaderId === you;
+    case 'vote': return game.myVote === null;
+    case 'quest': return game.team.includes(you) && !game.myQuestCardPlayed;
+    case 'lady': return game.ladyHolder === you;
+    case 'assassin': return game.myRole === 'assassin';
+    default: return false;
+  }
+}
+
+// Shown to everyone but the host when the host's phone is offline.
+function renderHostOffline() {
+  const host = playerById(roomState.hostId);
+  if (host.connected || roomState.hostId === roomState.you) return '';
+  return `<section class="panel">
+    <p>The host (${escapeHtml(host.name)}) is offline.</p>
+    <button class="secondary wide" data-action="claimHost">Become host</button>
+  </section>`;
+}
+
+function renderSeatLink() {
+  if (!seatLinkInfo) return '';
+  const name = escapeHtml(playerById(seatLinkInfo.playerId).name);
+  return `<section class="panel highlight">
+    <h2>Rejoin link for ${name}</h2>
+    <p>Send this link to ${name}. Opening it on any phone takes over their seat. Their old phone is signed out. Everyone can see that you made this link.</p>
+    <input readonly value="${escapeHtml(seatLinkInfo.link)}">
+    <div class="row two seat-link-buttons">
+      <button class="primary" data-action="shareSeatLink">Share link</button>
+      <button class="secondary" data-action="closeSeatLink">Done</button>
+    </div>
+  </section>`;
 }
 
 // ---------- Home screen ----------
@@ -267,6 +320,7 @@ function renderLobby() {
       <button class="small secondary" data-action="share">Invite</button>
     </header>
 
+    ${renderHostOffline()}
     <section class="card">
       <h2>Players <span class="muted">(${playerCount}/10)</span></h2>
       <ul class="player-list">
@@ -464,6 +518,25 @@ function renderHistory(game) {
   for (const check of game.ladyChecks) {
     parts.push(`<p class="muted">🌊 ${nameOf(check.holderId)} looked at ${nameOf(check.targetId)}.</p>`);
   }
+  for (const id of game.seatHandoffs) {
+    parts.push(`<p class="muted">🔗 The host made a rejoin link for ${nameOf(id)}.</p>`);
+  }
+  if (game.history.length) {
+    const names = (ids) => (ids.length ? ids.map(nameOf).join(', ') : 'no one');
+    const entries = game.history.map((entry) => {
+      let outcome = '<span class="evil-text">Team rejected</span>';
+      if (entry.approved && entry.success === null) outcome = 'Team approved';
+      else if (entry.approved && entry.success) outcome = `<span class="good-text">Quest succeeded</span>${entry.failCount ? ` (${entry.failCount} Fail)` : ''}`;
+      else if (entry.approved) outcome = `<span class="evil-text">Quest failed</span> (${entry.failCount} Fail)`;
+      return `<div class="log-entry">
+        <p><b>Quest ${entry.questIndex + 1}</b> · Leader: ${nameOf(entry.leaderId)} · ${outcome}</p>
+        <p class="muted">Team: ${names(entry.team)}</p>
+        <p class="muted">👍 ${names(game.seatOrder.filter((id) => entry.votes[id]))}</p>
+        <p class="muted">👎 ${names(game.seatOrder.filter((id) => !entry.votes[id]))}</p>
+      </div>`;
+    }).join('');
+    parts.push(`<details class="log" ${historyOpen ? 'open' : ''}><summary>Full history (${game.history.length} vote${game.history.length === 1 ? '' : 's'})</summary>${entries}</details>`);
+  }
   return parts.length ? `<section class="card history">${parts.join('')}</section>` : '';
 }
 
@@ -490,6 +563,7 @@ function renderPlayers(game) {
     if (phase === 'vote' && game.votedIds.includes(id)) badges.push('<span class="badge done">Voted</span>');
     if (phase === 'quest' && game.playedIds.includes(id)) badges.push('<span class="badge done">Played</span>');
     if (!player.connected) badges.push('<span class="badge offline">Offline</span>');
+    if (!player.connected && roomState.hostId === you && id !== you) badges.push(`<button class="small secondary" data-action="seatLink" data-id="${id}">Rejoin link</button>`);
     const canPick = pickable(id);
     return `<li class="player-row ${canPick ? 'pickable' : ''} ${selected ? 'selected' : ''}" ${canPick ? `data-action="pick" data-id="${id}"` : ''}>
       ${avatarHtml(id)}
@@ -536,10 +610,11 @@ function renderGame() {
       <div class="muted">${roomState.phase === 'end' ? 'Game over' : `Quest ${game.questIndex + 1} of 5`}</div>
     </header>`;
   if (roomState.phase === 'end') {
-    appElement.innerHTML = header + renderBoard(game) + renderEnd(game);
+    appElement.innerHTML = header + renderBoard(game) + renderHostOffline() + renderEnd(game) + renderHistory(game);
     return;
   }
-  appElement.innerHTML = header + renderBoard(game) + renderRoleCard(game) + renderPhasePanel(game) + renderPlayers(game) + renderHistory(game);
+  const turnBanner = isMyTurn() ? '<div class="turn-banner">Your turn</div>' : '';
+  appElement.innerHTML = header + turnBanner + renderBoard(game) + renderHostOffline() + renderSeatLink() + renderPhasePanel(game) + renderRoleCard(game) + renderPlayers(game) + renderHistory(game);
 }
 
 function render() {
@@ -583,6 +658,25 @@ appElement.addEventListener('click', async (event) => {
       } catch { /* the person closed the share sheet */ }
       break;
     }
+    case 'claimHost':
+      send({ type: 'claimHost' });
+      break;
+    case 'seatLink':
+      send({ type: 'seatLink', playerId: target.dataset.id });
+      break;
+    case 'shareSeatLink':
+      try {
+        if (navigator.share) await navigator.share({ title: 'Rejoin our Avalon game', url: seatLinkInfo.link });
+        else {
+          await navigator.clipboard.writeText(seatLinkInfo.link);
+          showToast('Rejoin link copied.');
+        }
+      } catch { /* the person closed the share sheet */ }
+      break;
+    case 'closeSeatLink':
+      seatLinkInfo = null;
+      render();
+      break;
     case 'kick':
       send({ type: 'kick', playerId: target.dataset.id });
       break;
@@ -634,6 +728,18 @@ appElement.addEventListener('click', async (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && event.target.id === 'home-code') appElement.querySelector('[data-action="join"]').click();
 });
+
+// Remember whether the history list is open, so it stays open across updates.
+appElement.addEventListener('toggle', (event) => {
+  if (event.target.classList.contains('log')) historyOpen = event.target.open;
+}, true);
+
+// A rejoin link from the host signs this phone in to that player's seat.
+const linkParams = new URLSearchParams(location.search);
+if (linkParams.get('room') && linkParams.get('seat') && linkParams.get('key')) {
+  writeStorage('avalonSession', { code: linkParams.get('room').toUpperCase(), playerId: linkParams.get('seat'), token: linkParams.get('key') });
+  history.replaceState(null, '', '/');
+}
 
 renderHome();
 connect();

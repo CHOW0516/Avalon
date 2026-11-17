@@ -212,3 +212,18 @@ test('everyone sees the leader\'s picks before the team is confirmed', () => {
   proposeAndVote(room, ['p0', 'p1'], false);
   assert.deepStrictEqual(room.game.draftTeam, []);
 });
+
+test('history keeps every vote and the quest result', () => {
+  const room = makeRoom(5);
+  game.startGame(room);
+  proposeAndVote(room, ['p0', 'p1'], false);
+  runQuest(room, goodTeam(room));
+  const history = game.gameViewFor(room, 'p0').history;
+  assert.strictEqual(history.length, 2);
+  assert.strictEqual(history[0].approved, false);
+  assert.strictEqual(history[0].success, null);
+  assert.strictEqual(history[1].approved, true);
+  assert.strictEqual(history[1].success, true);
+  assert.strictEqual(history[1].failCount, 0);
+  assert.strictEqual(Object.keys(history[1].votes).length, 5);
+});
