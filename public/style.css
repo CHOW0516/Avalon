@@ -259,6 +259,24 @@ input:not([type]), input[type="text"] {
 .quest-card.success { background: var(--good-dark); border-color: var(--good); }
 .quest-card.fail { background: var(--evil-dark); border-color: var(--evil); }
 
+.turn-banner {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--gold);
+  color: #1c1606;
+  font-weight: 800;
+  text-align: center;
+  padding: 8px;
+  border-radius: 0 0 12px 12px;
+}
+.seat-link-buttons { margin-top: 10px; }
+input[readonly] { font-size: 0.8rem; }
+
+.log summary { cursor: pointer; color: var(--gold); padding: 8px 0; font-weight: 600; }
+.log-entry { border-top: 1px solid var(--border); padding: 8px 0; }
+.log-entry p { margin: 2px 0; }
+
 /* ---------- End ---------- */
 
 .end-banner { text-align: center; padding: 20px; border-radius: 18px; border: 2px solid; }

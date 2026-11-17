@@ -79,8 +79,11 @@ function startGame(room, random = Math.random) {
     questResults: [],
     rejectCount: 0,
     team: [],
+    draftTeam: [], // the leader's picks so far, shown to everyone before confirming
     votes: {},
     lastVote: null,
+    history: [], // every team vote, and the quest result when a team was approved
+    seatHandoffs: [], // players the host made a rejoin link for
     questCards: {},
     ladyHolder,
     ladyPastHolders: ladyHolder ? [ladyHolder] : [],
@@ -101,6 +104,7 @@ function passLeaderAndStartTeamPhase(room) {
   const game = room.game;
   game.leaderSeat = (game.leaderSeat + 1) % game.seatOrder.length;
   game.team = [];
+  game.draftTeam = [];
   game.votes = {};
   room.phase = 'team';
 }
@@ -122,6 +126,7 @@ function resolveVote(room) {
     approved,
     questIndex: game.questIndex,
   };
+  game.history.push({ ...game.lastVote, failCount: null, success: null });
   game.votes = {};
   if (approved) {
     game.questCards = {};
@@ -145,6 +150,9 @@ function resolveQuest(room) {
     failCount,
     success: failCount < needed,
   });
+  const historyEntry = game.history[game.history.length - 1];
+  historyEntry.failCount = failCount;
+  historyEntry.success = failCount < needed;
   game.questCards = {};
 
   const successCount = game.questResults.filter((result) => result.success).length;
@@ -174,6 +182,17 @@ function handleAction(room, playerId, action) {
   if (!game || !game.roles[playerId]) return 'You are not in this game.';
 
   switch (action.type) {
+    case 'selectTeam': {
+      if (room.phase !== 'team') return 'It is not time to pick a team.';
+      if (leaderId(game) !== playerId) return 'Only the leader can pick the team.';
+      const draftTeam = Array.isArray(action.team) ? [...new Set(action.team)] : [];
+      const teamSize = TEAM_SIZES_BY_PLAYERS[game.seatOrder.length][game.questIndex];
+      if (draftTeam.length > teamSize) return `The team has only ${teamSize} players.`;
+      if (!draftTeam.every((id) => game.roles[id])) return 'Unknown player on the team.';
+      game.draftTeam = draftTeam;
+      return null;
+    }
+
     case 'proposeTeam': {
       if (room.phase !== 'team') return 'It is not time to pick a team.';
       if (leaderId(game) !== playerId) return 'Only the leader can pick the team.';
@@ -182,6 +201,7 @@ function handleAction(room, playerId, action) {
       if (team.length !== teamSize) return `The team needs exactly ${teamSize} players.`;
       if (!team.every((id) => game.roles[id])) return 'Unknown player on the team.';
       game.team = team;
+      game.draftTeam = [];
       game.votes = {};
       room.phase = 'vote';
       return null;
@@ -273,8 +293,11 @@ function gameViewFor(room, playerId) {
     questResults: game.questResults,
     rejectCount: game.rejectCount,
     team: game.team,
+    draftTeam: game.draftTeam,
     votedIds: Object.keys(game.votes),
     lastVote: game.lastVote,
+    history: game.history,
+    seatHandoffs: game.seatHandoffs,
     playedIds: Object.keys(game.questCards),
     ladyHolder: game.ladyHolder,
     ladyPastHolders: game.ladyPastHolders,
