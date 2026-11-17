@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const game = require('./game');
+const store = require('./store');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -26,7 +27,7 @@ const DEFAULT_SETTINGS = { percival: false, morgana: false, mordred: false, ober
 
 // ---------- HTTP ----------
 
-const server = http.createServer((request, response) => {
+const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
 
   if (url.pathname === '/health') {
@@ -37,7 +38,7 @@ const server = http.createServer((request, response) => {
 
   const photoMatch = url.pathname.match(/^\/photo\/([A-Z]{4})\/([a-f0-9]+)$/);
   if (photoMatch) {
-    const room = rooms.get(photoMatch[1]);
+    const room = await findRoom(photoMatch[1]);
     const player = room && room.players.find((candidate) => candidate.id === photoMatch[2]);
     if (!player || !player.photo) {
       response.writeHead(404);
@@ -109,8 +110,25 @@ function roomViewFor(room, playerId) {
   };
 }
 
+// Finds a room in memory. After a server restart it is loaded back from the room store.
+const roomsBeingLoaded = new Map(); // room code -> promise, so many phones rejoining share one load
+async function findRoom(code) {
+  if (typeof code !== 'string' || !/^[A-Z]{4}$/.test(code)) return null;
+  if (rooms.has(code)) return rooms.get(code);
+  if (!store.enabled) return null;
+  if (!roomsBeingLoaded.has(code)) {
+    roomsBeingLoaded.set(code, store.loadRoom(code).then((room) => {
+      roomsBeingLoaded.delete(code);
+      if (room && !rooms.has(code)) rooms.set(code, room);
+      return rooms.get(code) || null;
+    }));
+  }
+  return roomsBeingLoaded.get(code);
+}
+
 function broadcast(room) {
   room.lastActive = Date.now();
+  store.saveRoom(room);
   for (const [socket, session] of sessions) {
     if (session.roomCode === room.code && socket.readyState === socket.OPEN) {
       socket.send(JSON.stringify({ type: 'state', state: roomViewFor(room, session.playerId) }));
@@ -128,6 +146,7 @@ function removePlayer(room, playerId) {
   }
   if (room.players.length === 0) {
     rooms.delete(room.code);
+    store.deleteRoom(room);
     return;
   }
   if (room.hostId === playerId) room.hostId = room.players[0].id;
@@ -164,7 +183,7 @@ function detach(socket) {
   }
 }
 
-function handleMessage(socket, message) {
+async function handleMessage(socket, message) {
   // Messages that do not need a room yet.
   if (message.type === 'create') {
     const name = cleanName(message.name);
@@ -179,7 +198,8 @@ function handleMessage(socket, message) {
 
   if (message.type === 'join') {
     const name = cleanName(message.name);
-    const room = rooms.get(String(message.code || '').toUpperCase().trim());
+    const room = await findRoom(String(message.code || '').toUpperCase().trim());
+    if (socket.readyState !== socket.OPEN) return;
     if (!name) return sendError(socket, 'Please enter your name.');
     if (!room) return sendError(socket, 'Room not found. Check the code.');
     if (room.phase !== 'lobby') return sendError(socket, 'That game has already started.');
@@ -191,7 +211,8 @@ function handleMessage(socket, message) {
   }
 
   if (message.type === 'rejoin') {
-    const room = rooms.get(message.code);
+    const room = await findRoom(message.code);
+    if (socket.readyState !== socket.OPEN) return;
     const player = room && room.players.find((candidate) => candidate.id === message.playerId);
     if (!player || player.token !== message.token) {
       return socket.send(JSON.stringify({ type: 'sessionExpired' }));
@@ -215,6 +236,7 @@ function handleMessage(socket, message) {
       player.photo = photo;
       player.photoType = match[1];
       player.photoVersion += 1;
+      store.savePhoto(room, player);
       return broadcast(room);
     }
 
@@ -299,12 +321,10 @@ wss.on('connection', (socket) => {
       return;
     }
     if (!message || typeof message.type !== 'string') return;
-    try {
-      handleMessage(socket, message);
-    } catch (error) {
+    handleMessage(socket, message).catch((error) => {
       console.error(error);
-      sendError(socket, 'Something went wrong.');
-    }
+      if (socket.readyState === socket.OPEN) sendError(socket, 'Something went wrong.');
+    });
   });
   socket.on('close', () => detach(socket));
 });
@@ -332,4 +352,5 @@ setInterval(() => {
 
 server.listen(PORT, () => {
   console.log(`Avalon server running on http://localhost:${PORT}`);
+  console.log(store.enabled ? 'Rooms are backed up to the room store.' : 'Rooms are kept in memory only.');
 });

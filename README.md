@@ -28,7 +28,15 @@ Run the rule tests with `npm test`.
 
 On the free plan, the server sleeps after 15 minutes with no visitors. The first visit after that takes about 30 seconds to load. Open the link a minute before game night.
 
-Rooms and photos are kept in memory only. They disappear if the server restarts or sleeps, so a game should not be left idle for long.
+## Keep games alive across restarts (free, optional)
+
+Without this step, rooms and photos are kept in memory only and are lost when the server restarts or sleeps.
+
+1. Sign up at https://upstash.com (free plan) and create a **Redis** database.
+2. On the database page, find the **REST API** section. Copy `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
+3. In Render, open your service, go to **Environment**, and add both as environment variables. Save. Render restarts the server.
+
+Rooms are then saved after every change and kept for 24 hours. After a restart, each phone rejoins its seat by itself. The token is a secret: only put it in Render, never in the code.
 
 ## How a game works
 
@@ -43,5 +51,6 @@ Rooms and photos are kept in memory only. They disappear if the server restarts 
 
 - `server.js`: web server, rooms, photos, live updates
 - `game.js`: game rules (no networking)
+- `store.js`: optional room backup in Upstash Redis
 - `public/`: the phone page (`index.html`, `app.js`, `style.css`)
 - `test/game.test.js`: rule tests
